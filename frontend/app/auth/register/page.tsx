@@ -83,4 +83,5 @@
 //       </div>
 //     </div>
 //   );
-// }
+// }export default function RegisterPage() { return null; }
+export default function RegisterPage() { return null; }
