@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState, MutableRefObject } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Socket } from "socket.io-client";
+import type { MutableRefObject } from "react";
 
 const ICE_SERVERS = {
   iceServers: [
@@ -10,23 +11,41 @@ const ICE_SERVERS = {
   ],
 };
 
+function createBlankVideoTrack(): MediaStreamTrack {
+  const canvas = document.createElement("canvas");
+  canvas.width = 640;
+  canvas.height = 480;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#1a1a2e";
+  ctx.fillRect(0, 0, 640, 480);
+  // Person icon circle (head)
+  ctx.fillStyle = "#4a4a6a";
+  ctx.beginPath();
+  ctx.arc(320, 180, 80, 0, Math.PI * 2);
+  ctx.fill();
+  // Person icon body
+  ctx.beginPath();
+  ctx.ellipse(320, 400, 130, 100, 0, 0, Math.PI * 2);
+  ctx.fill();
+  const stream = canvas.captureStream(1);
+  return stream.getVideoTracks()[0];
+}
+
 export function useWebRTC(socketRef: MutableRefObject<Socket | null>) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
-  const [remoteNames, setRemoteNames] = useState<Map<string, string>>(new Map());
   const [isVideoOn, setIsVideoOn] = useState(true);
   const [isAudioOn, setIsAudioOn] = useState(true);
 
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const [remoteNames, setRemoteNames] = useState<Map<string, string>>(new Map());
 
-  // ─── Start local camera/mic ───────────────────────────────────────────────
   const startLocalMedia = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       localStreamRef.current = stream;
 
-      // Restore previous toggle states from sessionStorage (per-tab)
       const savedVideo = sessionStorage.getItem("videoOn");
       const savedAudio = sessionStorage.getItem("audioOn");
 
@@ -50,161 +69,150 @@ export function useWebRTC(socketRef: MutableRefObject<Socket | null>) {
     }
   }, []);
 
-  // ─── Create peer connection ───────────────────────────────────────────────
-  const createPeerConnection = useCallback((socketId: string): RTCPeerConnection => {
+  function createPeerConnection(targetSocketId: string): RTCPeerConnection {
     const pc = new RTCPeerConnection(ICE_SERVERS);
 
-    // Add local tracks
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => {
         pc.addTrack(track, localStreamRef.current!);
       });
     }
 
-    // ICE candidates
+    pc.ontrack = (event) => {
+      const stream = event.streams[0];
+      setRemoteStreams((prev) => new Map(prev).set(targetSocketId, stream));
+    };
+
     pc.onicecandidate = (event) => {
       if (event.candidate && socketRef.current) {
         socketRef.current.emit("webrtc:ice-candidate", {
-          targetSocketId: socketId,
+          targetSocketId,
           candidate: event.candidate,
         });
       }
     };
 
-    // Remote stream
-    pc.ontrack = (event) => {
-      const [remoteStream] = event.streams;
-      setRemoteStreams((prev) => new Map(prev).set(socketId, remoteStream));
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+        pc.close();
+        peerConnections.current.delete(targetSocketId);
+        setRemoteStreams((prev) => {
+          const next = new Map(prev);
+          next.delete(targetSocketId);
+          return next;
+        });
+      }
     };
 
-    peerConnections.current.set(socketId, pc);
+    peerConnections.current.set(targetSocketId, pc);
     return pc;
-  }, [socketRef]);
+  }
 
-  // ─── Socket event listeners ───────────────────────────────────────────────
   useEffect(() => {
-    const interval = setInterval(() => {
-      const socket = socketRef.current;
-      if (!socket) return;
+    if (!socketRef.current) return;
 
-      clearInterval(interval);
+    socketRef.current.on("webrtc:new-peer", async ({ socketId, userName }: { socketId: string; userName: string }) => {
+      setRemoteNames((prev) => new Map(prev).set(socketId, userName));
+      await new Promise((r) => setTimeout(r, 500));
+      const pc = createPeerConnection(socketId);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socketRef.current?.emit("webrtc:offer", { targetSocketId: socketId, offer });
+    });
 
-      // Existing peer joins → we create offer
-      socket.on("webrtc:new-peer", async ({ socketId, userName }: { socketId: string; userName: string }) => {
-        setRemoteNames((prev) => new Map(prev).set(socketId, userName));
-        await new Promise((r) => setTimeout(r, 500));
-        const pc = createPeerConnection(socketId);
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        socket.emit("webrtc:offer", { targetSocketId: socketId, offer });
-      });
+    socketRef.current.on("webrtc:offer", async ({ from, offer }: { from: string; offer: RTCSessionDescriptionInit }) => {
+      const pc = createPeerConnection(from);
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socketRef.current?.emit("webrtc:answer", { targetSocketId: from, answer });
+    });
 
-      // Receive offer → send answer
-      socket.on("webrtc:offer", async ({ from, offer, userName }: {
-        from: string;
-        offer: RTCSessionDescriptionInit;
-        userName: string;
-      }) => {
-        setRemoteNames((prev) => new Map(prev).set(from, userName));
-        const pc = createPeerConnection(from);
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit("webrtc:answer", { targetSocketId: from, answer });
-      });
+    socketRef.current.on("webrtc:answer", async ({ from, answer }: { from: string; answer: RTCSessionDescriptionInit }) => {
+      const pc = peerConnections.current.get(from);
+      if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    });
 
-      // Receive answer
-      socket.on("webrtc:answer", async ({ from, answer, userName }: {
-        from: string;
-        answer: RTCSessionDescriptionInit;
-        userName: string;
-      }) => {
-        setRemoteNames((prev) => new Map(prev).set(from, userName));
-        const pc = peerConnections.current.get(from);
-        if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
-      });
+    socketRef.current.on("webrtc:ice-candidate", async ({ from, candidate }: { from: string; candidate: RTCIceCandidateInit }) => {
+      const pc = peerConnections.current.get(from);
+      if (pc) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
+      }
+    });
 
-      // ICE candidate
-      socket.on("webrtc:ice-candidate", async ({ from, candidate }: {
-        from: string;
-        candidate: RTCIceCandidateInit;
-      }) => {
-        const pc = peerConnections.current.get(from);
-        if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      });
+    socketRef.current.on("webrtc:peer-left", ({ socketId }: { socketId: string }) => {
+      setRemoteNames((prev) => { const next = new Map(prev); next.delete(socketId); return next; });
+      const pc = peerConnections.current.get(socketId);
+      if (pc) { pc.close(); peerConnections.current.delete(socketId); }
+      setRemoteStreams((prev) => { const next = new Map(prev); next.delete(socketId); return next; });
+    });
 
-      // Peer left
-      socket.on("webrtc:peer-left", ({ socketId }: { socketId: string }) => {
-        const pc = peerConnections.current.get(socketId);
-        if (pc) { pc.close(); peerConnections.current.delete(socketId); }
-        setRemoteStreams((prev) => { const next = new Map(prev); next.delete(socketId); return next; });
-        setRemoteNames((prev) => { const next = new Map(prev); next.delete(socketId); return next; });
-      });
+    return () => {
+      socketRef.current?.off("webrtc:new-peer");
+      socketRef.current?.off("webrtc:offer");
+      socketRef.current?.off("webrtc:answer");
+      socketRef.current?.off("webrtc:ice-candidate");
+      socketRef.current?.off("webrtc:peer-left");
+    };
+  }, [socketRef.current]);
 
-      // Audio toggle from remote
-      socket.on("media:audio-toggle", ({ socketId, isAudioOn: remoteAudio }: {
-        socketId: string;
-        isAudioOn: boolean;
-      }) => {
-        // UI update if needed — currently handled by stream state
-        console.log(`${socketId} audio: ${remoteAudio}`);
-      });
-    }, 100);
+  useEffect(() => {
+    return () => {
+      peerConnections.current.forEach((pc) => pc.close());
+      localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
 
-    return () => clearInterval(interval);
-  }, [socketRef, createPeerConnection]);
-
-  // ─── Toggle video ─────────────────────────────────────────────────────────
   const toggleVideo = useCallback(async () => {
     if (!localStreamRef.current) return;
 
-    if (isVideoOn) {
-      // Turn OFF — stop track and replace with null in peers
-      const videoTrack = localStreamRef.current.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.stop();
-        localStreamRef.current.removeTrack(videoTrack);
-      }
-      for (const pc of Array.from(peerConnections.current.values())) {
-        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-        if (sender) await sender.replaceTrack(null);
-      }
+    const videoTrack = localStreamRef.current.getVideoTracks()[0];
+
+    if (videoTrack && videoTrack.readyState === "live") {
+      videoTrack.stop();
       setIsVideoOn(false);
       sessionStorage.setItem("videoOn", "false");
-    } else {
-      // Turn ON — get new camera track
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        const newTrack = stream.getVideoTracks()[0];
-        localStreamRef.current.addTrack(newTrack);
-        for (const pc of Array.from(peerConnections.current.values())) {
-          const sender = pc.getSenders().find((s) => s.track === null || s.track?.kind === "video");
-          if (sender) await sender.replaceTrack(newTrack);
-          else pc.addTrack(newTrack, localStreamRef.current);
-        }
-        setIsVideoOn(true);
-        sessionStorage.setItem("videoOn", "true");
-      } catch (err) {
-        console.error("Camera restart failed:", err);
-      }
-    }
-  }, [isVideoOn]);
 
-  // ─── Toggle audio — simple enable/disable, no stop/remove ────────────────
-  const toggleAudio = useCallback(async () => {
+      const blankTrack = createBlankVideoTrack();
+      for (const pc of Array.from(peerConnections.current.values())) {
+        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+        if (sender) await sender.replaceTrack(blankTrack);
+      }
+      return;
+    }
+
+    try {
+      const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const newTrack = newStream.getVideoTracks()[0];
+
+      const oldTracks = localStreamRef.current.getVideoTracks();
+      oldTracks.forEach((t) => localStreamRef.current?.removeTrack(t));
+      localStreamRef.current.addTrack(newTrack);
+
+      for (const pc of Array.from(peerConnections.current.values())) {
+        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+        if (sender) await sender.replaceTrack(newTrack);
+      }
+
+      setIsVideoOn(true);
+      sessionStorage.setItem("videoOn", "true");
+    } catch (err) {
+      console.error("Camera restart failed:", err);
+    }
+  }, []);
+
+  const toggleAudio = useCallback(() => {
     if (!localStreamRef.current) return;
 
     const audioTrack = localStreamRef.current.getAudioTracks()[0];
     if (!audioTrack) return;
 
     if (isAudioOn) {
-      // MUTE — just disable, keep the track alive
       audioTrack.enabled = false;
       setIsAudioOn(false);
       sessionStorage.setItem("audioOn", "false");
       socketRef.current?.emit("media:audio-toggle", { isAudioOn: false });
     } else {
-      // UNMUTE — just re-enable
       audioTrack.enabled = true;
       setIsAudioOn(true);
       sessionStorage.setItem("audioOn", "true");
