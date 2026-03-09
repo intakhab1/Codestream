@@ -1,3 +1,5 @@
+export default function LoginPage() { return null; }
+
 // "use client";
 
 // import { useState, useEffect } from "react";
