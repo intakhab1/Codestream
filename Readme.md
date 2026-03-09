@@ -10,8 +10,6 @@ Built with Next.js 15, Express, Socket.io, WebRTC, and MongoDB
 [![Socket.io](https://img.shields.io/badge/Socket.io-4.0-black?style=flat-square&logo=socket.io)](https://socket.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
----
-
 ## Features
 
 - **Real-time code sync** — Every keystroke synced instantly across all participants
@@ -22,8 +20,6 @@ Built with Next.js 15, Express, Socket.io, WebRTC, and MongoDB
 - **Persistent rooms** — Code and chat history saved to MongoDB
 - **Resizable panels** — Drag to resize editor, chat, and video panels
 - **Dark/light mode** — System-aware theme switching
-
----
 
 ## Tech Stack
 
@@ -46,8 +42,6 @@ Built with Next.js 15, Express, Socket.io, WebRTC, and MongoDB
 | MongoDB | Database (rooms, messages) |
 | Prisma | ORM (PostgreSQL-ready for future migration) |
 | Judge0 CE | Code execution engine |
-
----
 
 ## Getting Started
 
@@ -97,8 +91,6 @@ npm run dev
 ### 4. Open the app
 Go to [http://localhost:3000](http://localhost:3000)
 
----
-
 ## Project Structure
 
 ```
@@ -129,8 +121,6 @@ Codestream/
         └── index.ts           # Server entry point
 ```
 
----
-
 ## Deployment
 
 ### Backend → Render
@@ -153,8 +143,6 @@ Codestream/
    NEXT_PUBLIC_API_URL=<your Render URL>
    ```
 
----
-
 ## Environment Variables
 
 ### Backend (`backend/.env`)
@@ -170,7 +158,6 @@ Codestream/
 |---|---|
 | `NEXT_PUBLIC_API_URL` | Backend API URL |
 
----
 
 ## How It Works
 
