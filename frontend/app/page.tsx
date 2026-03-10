@@ -12,6 +12,11 @@ export default function HomePage() {
   const [isCreating, setIsCreating] = useState(false);
   const [tab, setTab] = useState<"create" | "join">("create");
 
+  // Wake up Render backend as soon as page loads
+  useEffect(() => {
+    fetch(`${process.env.NEXT_PUBLIC_API_URL}/health`).catch(() => {});
+  }, []);
+
   useEffect(() => {
     const saved = localStorage.getItem("userName");
     if (saved) setUserName(saved);
