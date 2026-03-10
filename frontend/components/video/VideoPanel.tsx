@@ -57,6 +57,7 @@ function VideoTile({ stream, name, isLocal = false, isMuted = false, isVideoOff 
 interface VideoPanelProps {
   localStream: MediaStream | null;
   remoteStreams: Map<string, MediaStream>;
+  remoteNames: Map<string, string>;
   isVideoOn: boolean;
   isAudioOn: boolean;
   onToggleVideo: () => void;
@@ -64,7 +65,7 @@ interface VideoPanelProps {
   localUserName: string;
   participants: { socketId: string; userName: string; isAudioOn?: boolean }[];}
 
-export function VideoPanel({ localStream, remoteStreams, isVideoOn, isAudioOn, onToggleVideo, onToggleAudio, localUserName, participants }: VideoPanelProps) {
+export function VideoPanel({ localStream, remoteStreams, remoteNames, isVideoOn, isAudioOn, onToggleVideo, onToggleAudio, localUserName, participants }: VideoPanelProps) {
   return (
     <div className="h-full flex flex-col bg-card border-l border-border">
       <div className="px-4 py-3 border-b border-border">
@@ -83,7 +84,7 @@ export function VideoPanel({ localStream, remoteStreams, isVideoOn, isAudioOn, o
             <VideoTile
               key={socketId}
               stream={stream}
-              name={participant?.userName || "Unknown"}
+              name={remoteNames.get(socketId) || participant?.userName || "Unknown"}
               // isMuted={participant ? !participant.isAudioOn : false}
               isMuted={participant?.isAudioOn === false}
             />

@@ -16,6 +16,7 @@ import { ChatPanel } from "@/components/chat/ChatPanel";
 import { ParticipantsPanel } from "@/components/participants/ParticipantsPanel";
 import { OutputPanel } from "@/components/editor/OutputPanel";
 import { Language } from "@/types";
+import { MobileVideoStrip } from "@/components/video/MobileVideoStrip";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -77,6 +78,9 @@ export default function RoomPage() {
     }
   }, [searchParams]);
 
+  useEffect(() => {
+    fetch(`${API_URL}/health`).catch(() => {});
+  }, []);
   // Remote code handler: updates editor directly WITHOUT Redux dispatch
   // This means no page re-render when remote user types — fixes flickering
   const handleRemoteCode = useCallback((code: string) => {
@@ -288,8 +292,26 @@ export default function RoomPage() {
           >
             <div className="w-8 h-0.5 bg-muted-foreground/30 rounded-full" />
           </div>
+          {/* Mobile only: video strip + chat */}
+          <div className="flex flex-col md:hidden flex-1 overflow-hidden min-h-0">
+            <MobileVideoStrip
+              localStream={localStream}
+              remoteStreams={remoteStreams}
+              remoteNames={remoteNames}
+              isVideoOn={isVideoOn}
+              isAudioOn={isAudioOn}
+              onToggleVideo={toggleVideo}
+              onToggleAudio={toggleAudio}
+              localUserName={userName}
+              participants={participants}
+            />
+            <div className="h-48 shrink-0 overflow-hidden">
+              <ChatPanel messages={messages} onSendMessage={sendMessage} currentUserName={userName} />
+            </div>
+          </div>
 
-          <div className="flex-1 overflow-hidden min-h-0">
+          {/* Desktop only: chat */}
+          <div className="hidden md:block flex-1 overflow-hidden min-h-0">
             <ChatPanel messages={messages} onSendMessage={sendMessage} currentUserName={userName} />
           </div>
         </div>
@@ -305,6 +327,7 @@ export default function RoomPage() {
           <VideoPanel
             localStream={localStream}
             remoteStreams={remoteStreams}
+            remoteNames={remoteNames}
             isVideoOn={isVideoOn}
             isAudioOn={isAudioOn}
             onToggleVideo={toggleVideo}
