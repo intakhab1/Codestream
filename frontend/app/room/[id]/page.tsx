@@ -44,8 +44,6 @@ export default function RoomPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [userName, setUserName] = useState("Anonymous");
 
-  // This ref holds the editor's direct update function.
-  // Remote code changes call this directly — bypassing Redux — so no page re-render.
   const remoteUpdateRef = useRef<(code: string) => void>(() => {});
 
   // Resizing
@@ -61,6 +59,11 @@ export default function RoomPage() {
   const [stderr, setStderr] = useState("");
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+
+  // Wake up Render backend on page load
+  useEffect(() => {
+    fetch(`${API_URL}/health`).catch(() => {});
+  }, []);
 
   // Load name from URL first — fixes "Anonymous" bug
   useEffect(() => {
@@ -78,21 +81,15 @@ export default function RoomPage() {
     }
   }, [searchParams]);
 
-  useEffect(() => {
-    fetch(`${API_URL}/health`).catch(() => {});
-  }, []);
-  // Remote code handler: updates editor directly WITHOUT Redux dispatch
-  // This means no page re-render when remote user types — fixes flickering
   const handleRemoteCode = useCallback((code: string) => {
     remoteUpdateRef.current(code);
-    // Still update Redux so currentCode stays correct for Run button
     dispatch(setCode(code));
   }, [dispatch]);
 
   const { socketRef, emitCodeChange, emitCursorChange, emitLanguageChange, sendMessage } =
     useSocket(roomId, userName, handleRemoteCode);
 
-  const { localStream, remoteStreams, remoteNames,isVideoOn, isAudioOn, startLocalMedia, toggleVideo, toggleAudio } =
+  const { localStream, remoteStreams, remoteNames, isVideoOn, isAudioOn, startLocalMedia, toggleVideo, toggleAudio } =
     useWebRTC(socketRef);
 
   // Load room data
@@ -219,16 +216,6 @@ export default function RoomPage() {
           <span className="hidden sm:block">Home</span>
         </button>
 
-        {/* <button
-          onClick={handleRun}
-          disabled={isRunning}
-          className="flex items-center gap-1.5 text-xs bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg transition-colors"
-        >
-          {isRunning
-            ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            : <span>▶ Run</span>}
-        </button> */}
-
         <div className="w-px h-5 bg-border" />
 
         <div className="flex items-center gap-2">
@@ -261,7 +248,8 @@ export default function RoomPage() {
 
         <div className="flex-1 flex flex-col overflow-hidden">
 
-          <div style={{ height: `${editorHeightPct}%` }} className="overflow-hidden min-h-0">
+          {/* Desktop editor — resizable height */}
+          <div style={{ height: `${editorHeightPct}%` }} className="overflow-hidden min-h-0 hidden md:block">
             <CollaborativeEditor
               code={currentCode}
               language={currentLanguage}
@@ -270,7 +258,19 @@ export default function RoomPage() {
               onLanguageChange={handleLanguageChange}
               onRun={handleRun}
               isRunning={isRunning}
+            />
+          </div>
 
+          {/* Mobile editor — fixed 45% so video strip + chat fit below */}
+          <div className="h-[45%] shrink-0 overflow-hidden min-h-0 md:hidden">
+            <CollaborativeEditor
+              code={currentCode}
+              language={currentLanguage}
+              onCodeChange={handleLocalCodeChange}
+              onCursorChange={emitCursorChange}
+              onLanguageChange={handleLanguageChange}
+              onRun={handleRun}
+              isRunning={isRunning}
             />
           </div>
 
@@ -286,13 +286,15 @@ export default function RoomPage() {
             </div>
           )}
 
+          {/* Desktop drag handle */}
           <div
             onMouseDown={(e) => { isDragging.current = true; e.preventDefault(); }}
-            className="h-2 bg-border hover:bg-primary/40 cursor-row-resize shrink-0 transition-colors flex items-center justify-center"
+            className="h-2 bg-border hover:bg-primary/40 cursor-row-resize shrink-0 transition-colors hidden md:flex items-center justify-center"
           >
             <div className="w-8 h-0.5 bg-muted-foreground/30 rounded-full" />
           </div>
-          {/* Mobile only: video strip + chat */}
+
+          {/* Mobile: video strip + chat fills remaining space */}
           <div className="flex flex-col md:hidden flex-1 overflow-hidden min-h-0">
             <MobileVideoStrip
               localStream={localStream}
@@ -305,17 +307,19 @@ export default function RoomPage() {
               localUserName={userName}
               participants={participants}
             />
-            <div className="h-48 shrink-0 overflow-hidden">
+            <div className="flex-1 overflow-hidden min-h-0">
               <ChatPanel messages={messages} onSendMessage={sendMessage} currentUserName={userName} />
             </div>
           </div>
 
-          {/* Desktop only: chat */}
+          {/* Desktop: chat */}
           <div className="hidden md:block flex-1 overflow-hidden min-h-0">
             <ChatPanel messages={messages} onSendMessage={sendMessage} currentUserName={userName} />
           </div>
+
         </div>
 
+        {/* Desktop horizontal drag handle */}
         <div
           onMouseDown={(e) => { isHDragging.current = true; e.preventDefault(); }}
           className="w-1.5 bg-border hover:bg-primary/40 cursor-col-resize shrink-0 transition-colors hidden md:flex items-center justify-center"
@@ -323,6 +327,7 @@ export default function RoomPage() {
           <div className="h-8 w-0.5 bg-muted-foreground/30 rounded-full" />
         </div>
 
+        {/* Desktop video panel */}
         <div style={{ width: `${videoPanelWidth}px` }} className="shrink-0 hidden md:block overflow-hidden">
           <VideoPanel
             localStream={localStream}
@@ -336,6 +341,7 @@ export default function RoomPage() {
             participants={participants}
           />
         </div>
+
       </div>
     </div>
   );
