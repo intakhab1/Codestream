@@ -28,6 +28,11 @@ const LANGUAGE_MAP: Record<string, { language: string; version: string }> = {
   java:       { language: "java",       version: "15.0.2" },
 };
 
+// Mobile section min/max heights (px)
+const MOBILE_EDITOR_MIN = 80;
+const MOBILE_VIDEO_MIN  = 60;
+const MOBILE_CHAT_MIN   = 60;
+
 export default function RoomPage() {
   const params = useParams();
   const router = useRouter();
@@ -46,12 +51,19 @@ export default function RoomPage() {
 
   const remoteUpdateRef = useRef<(code: string) => void>(() => {});
 
-  // Resizing
+  // ── Desktop resizing ──
   const [editorHeightPct, setEditorHeightPct] = useState(65);
   const isDragging = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [videoPanelWidth, setVideoPanelWidth] = useState(240);
   const isHDragging = useRef(false);
+
+  // ── Mobile resizing (pixel heights) ──
+  const mobileContainerRef = useRef<HTMLDivElement>(null);
+  const [mobileEditorH, setMobileEditorH] = useState(0); // 0 = not yet measured
+  const [mobileVideoH,  setMobileVideoH]  = useState(100);
+  const isDraggingTop    = useRef(false); // handle between editor and video
+  const isDraggingBottom = useRef(false); // handle between video and chat
 
   // Output panel
   const [showOutput, setShowOutput] = useState(false);
@@ -65,7 +77,7 @@ export default function RoomPage() {
     fetch(`${API_URL}/health`).catch(() => {});
   }, []);
 
-  // Load name from URL first — fixes "Anonymous" bug
+  // Load name from URL
   useEffect(() => {
     const nameFromUrl = searchParams.get("name");
     if (nameFromUrl) {
@@ -80,6 +92,20 @@ export default function RoomPage() {
       }
     }
   }, [searchParams]);
+
+  // Measure mobile container and set initial editor height
+  useEffect(() => {
+    function measure() {
+      if (mobileContainerRef.current && mobileEditorH === 0) {
+        const total = mobileContainerRef.current.clientHeight;
+        setMobileEditorH(Math.floor(total * 0.45));
+        setMobileVideoH(Math.floor(total * 0.20));
+      }
+    }
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [mobileEditorH]);
 
   const handleRemoteCode = useCallback((code: string) => {
     remoteUpdateRef.current(code);
@@ -103,7 +129,7 @@ export default function RoomPage() {
           fetch(`${API_URL}/api/messages/${roomId}`),
         ]);
         const roomData = await roomRes.json();
-        const msgData = await msgRes.json();
+        const msgData  = await msgRes.json();
         if (!roomRes.ok) { router.push("/"); return; }
         dispatch(setCurrentRoom(roomData.room));
         dispatch(setMessages(msgData.messages || []));
@@ -122,31 +148,73 @@ export default function RoomPage() {
     };
   }, [roomId]);
 
-  // Resize event listeners
+  // ── Resize event listeners ──
   useEffect(() => {
+    // Desktop vertical
     function onMouseMove(e: MouseEvent) {
       if (!isDragging.current || !containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
       const pct = ((e.clientY - rect.top) / rect.height) * 100;
       setEditorHeightPct(Math.min(Math.max(pct, 25), 85));
     }
-    function onMouseUp() { isDragging.current = false; }
+    function onMouseUp() {
+      isDragging.current = false;
+      isDraggingTop.current = false;
+      isDraggingBottom.current = false;
+    }
+    // Desktop horizontal
     function onMouseMoveH(e: MouseEvent) {
       if (!isHDragging.current) return;
       setVideoPanelWidth(Math.min(Math.max(window.innerWidth - e.clientX, 160), 480));
     }
     function onMouseUpH() { isHDragging.current = false; }
+
+    // Mobile touch — top handle (editor ↕ video)
+    function onTouchMoveTop(e: TouchEvent) {
+      if (!isDraggingTop.current || !mobileContainerRef.current) return;
+      const rect = mobileContainerRef.current.getBoundingClientRect();
+      const y = e.touches[0].clientY - rect.top;
+      const total = mobileContainerRef.current.clientHeight;
+      const newEditorH = Math.min(Math.max(y, MOBILE_EDITOR_MIN), total - mobileVideoH - MOBILE_CHAT_MIN - 16);
+      setMobileEditorH(newEditorH);
+    }
+
+    // Mobile touch — bottom handle (video ↕ chat)
+    function onTouchMoveBottom(e: TouchEvent) {
+      if (!isDraggingBottom.current || !mobileContainerRef.current) return;
+      const rect = mobileContainerRef.current.getBoundingClientRect();
+      const y = e.touches[0].clientY - rect.top;
+      const total = mobileContainerRef.current.clientHeight;
+      const newVideoH = Math.min(
+        Math.max(y - mobileEditorH - 8, MOBILE_VIDEO_MIN),
+        total - mobileEditorH - MOBILE_CHAT_MIN - 16
+      );
+      setMobileVideoH(newVideoH);
+    }
+
+    function onTouchEnd() {
+      isDraggingTop.current = false;
+      isDraggingBottom.current = false;
+    }
+
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
     window.addEventListener("mousemove", onMouseMoveH);
     window.addEventListener("mouseup", onMouseUpH);
+    window.addEventListener("touchmove", onTouchMoveTop,    { passive: true });
+    window.addEventListener("touchmove", onTouchMoveBottom, { passive: true });
+    window.addEventListener("touchend",  onTouchEnd);
+
     return () => {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
       window.removeEventListener("mousemove", onMouseMoveH);
       window.removeEventListener("mouseup", onMouseUpH);
+      window.removeEventListener("touchmove", onTouchMoveTop);
+      window.removeEventListener("touchmove", onTouchMoveBottom);
+      window.removeEventListener("touchend",  onTouchEnd);
     };
-  }, []);
+  }, [mobileEditorH, mobileVideoH]);
 
   const handleLocalCodeChange = useCallback((code: string) => {
     dispatch(setCode(code));
@@ -207,6 +275,15 @@ export default function RoomPage() {
     );
   }
 
+  const videoProps = {
+    localStream, remoteStreams, remoteNames,
+    isVideoOn, isAudioOn,
+    onToggleVideo: toggleVideo,
+    onToggleAudio: toggleAudio,
+    localUserName: userName,
+    participants,
+  };
+
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
       {/* Header */}
@@ -215,16 +292,13 @@ export default function RoomPage() {
           <ArrowLeft className="w-4 h-4" />
           <span className="hidden sm:block">Home</span>
         </button>
-
         <div className="w-px h-5 bg-border" />
-
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 bg-primary rounded-md flex items-center justify-center">
             <Code2 className="w-3.5 h-3.5 text-primary-foreground" />
           </div>
           <span className="font-semibold text-sm truncate max-w-[200px]">{currentRoom?.name || "Room"}</span>
         </div>
-
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-muted-foreground hidden sm:block">
             Hi, <span className="text-foreground font-medium">{userName}</span>
@@ -239,30 +313,61 @@ export default function RoomPage() {
         </div>
       </header>
 
-      {/* Main content */}
-      <div className="flex-1 flex overflow-hidden" ref={containerRef}>
+      {/* ── MOBILE layout ── */}
+      <div ref={mobileContainerRef} className="flex-1 flex flex-col overflow-hidden md:hidden">
+
+        {/* Editor */}
+        <div style={{ height: mobileEditorH || "45%" }} className="shrink-0 overflow-hidden min-h-0">
+          <CollaborativeEditor
+            code={currentCode}
+            language={currentLanguage}
+            onCodeChange={handleLocalCodeChange}
+            onCursorChange={emitCursorChange}
+            onLanguageChange={handleLanguageChange}
+            onRun={handleRun}
+            isRunning={isRunning}
+          />
+        </div>
+
+        {/* Drag handle 1 — between editor and video */}
+        <div
+          onMouseDown={(e) => { isDraggingTop.current = true; e.preventDefault(); }}
+          onTouchStart={() => { isDraggingTop.current = true; }}
+          className="h-3 bg-border active:bg-primary/60 cursor-row-resize shrink-0 flex items-center justify-center touch-none"
+        >
+          <div className="w-10 h-1 bg-muted-foreground/40 rounded-full" />
+        </div>
+
+        {/* Video strip — layout switches based on height */}
+        <div style={{ height: mobileVideoH || 100 }} className="shrink-0 overflow-hidden min-h-0 relative">
+          <MobileVideoStrip {...videoProps} panelHeight={mobileVideoH || 100} />
+        </div>
+
+        {/* Drag handle 2 — between video and chat */}
+        <div
+          onMouseDown={(e) => { isDraggingBottom.current = true; e.preventDefault(); }}
+          onTouchStart={() => { isDraggingBottom.current = true; }}
+          className="h-3 bg-border active:bg-primary/60 cursor-row-resize shrink-0 flex items-center justify-center touch-none"
+        >
+          <div className="w-10 h-1 bg-muted-foreground/40 rounded-full" />
+        </div>
+
+        {/* Chat — fills remaining space */}
+        <div className="flex-1 overflow-hidden min-h-0">
+          <ChatPanel messages={messages} onSendMessage={sendMessage} currentUserName={userName} />
+        </div>
+
+      </div>
+
+      {/* ── DESKTOP layout ── */}
+      <div className="flex-1 hidden md:flex overflow-hidden" ref={containerRef}>
 
         <div className="w-52 shrink-0 hidden lg:block">
           <ParticipantsPanel />
         </div>
 
         <div className="flex-1 flex flex-col overflow-hidden">
-
-          {/* Desktop editor — resizable height */}
-          <div style={{ height: `${editorHeightPct}%` }} className="overflow-hidden min-h-0 hidden md:block">
-            <CollaborativeEditor
-              code={currentCode}
-              language={currentLanguage}
-              onCodeChange={handleLocalCodeChange}
-              onCursorChange={emitCursorChange}
-              onLanguageChange={handleLanguageChange}
-              onRun={handleRun}
-              isRunning={isRunning}
-            />
-          </div>
-
-          {/* Mobile editor — fixed 45% so video strip + chat fit below */}
-          <div className="h-[45%] shrink-0 overflow-hidden min-h-0 md:hidden">
+          <div style={{ height: `${editorHeightPct}%` }} className="overflow-hidden min-h-0">
             <CollaborativeEditor
               code={currentCode}
               language={currentLanguage}
@@ -286,60 +391,27 @@ export default function RoomPage() {
             </div>
           )}
 
-          {/* Desktop drag handle */}
           <div
             onMouseDown={(e) => { isDragging.current = true; e.preventDefault(); }}
-            className="h-2 bg-border hover:bg-primary/40 cursor-row-resize shrink-0 transition-colors hidden md:flex items-center justify-center"
+            className="h-2 bg-border hover:bg-primary/40 cursor-row-resize shrink-0 transition-colors flex items-center justify-center"
           >
             <div className="w-8 h-0.5 bg-muted-foreground/30 rounded-full" />
           </div>
 
-          {/* Mobile: video strip + chat fills remaining space */}
-          <div className="flex flex-col md:hidden flex-1 overflow-hidden min-h-0">
-            <MobileVideoStrip
-              localStream={localStream}
-              remoteStreams={remoteStreams}
-              remoteNames={remoteNames}
-              isVideoOn={isVideoOn}
-              isAudioOn={isAudioOn}
-              onToggleVideo={toggleVideo}
-              onToggleAudio={toggleAudio}
-              localUserName={userName}
-              participants={participants}
-            />
-            <div className="flex-1 overflow-hidden min-h-0">
-              <ChatPanel messages={messages} onSendMessage={sendMessage} currentUserName={userName} />
-            </div>
-          </div>
-
-          {/* Desktop: chat */}
-          <div className="hidden md:block flex-1 overflow-hidden min-h-0">
+          <div className="flex-1 overflow-hidden min-h-0">
             <ChatPanel messages={messages} onSendMessage={sendMessage} currentUserName={userName} />
           </div>
-
         </div>
 
-        {/* Desktop horizontal drag handle */}
         <div
           onMouseDown={(e) => { isHDragging.current = true; e.preventDefault(); }}
-          className="w-1.5 bg-border hover:bg-primary/40 cursor-col-resize shrink-0 transition-colors hidden md:flex items-center justify-center"
+          className="w-1.5 bg-border hover:bg-primary/40 cursor-col-resize shrink-0 transition-colors flex items-center justify-center"
         >
           <div className="h-8 w-0.5 bg-muted-foreground/30 rounded-full" />
         </div>
 
-        {/* Desktop video panel */}
-        <div style={{ width: `${videoPanelWidth}px` }} className="shrink-0 hidden md:block overflow-hidden">
-          <VideoPanel
-            localStream={localStream}
-            remoteStreams={remoteStreams}
-            remoteNames={remoteNames}
-            isVideoOn={isVideoOn}
-            isAudioOn={isAudioOn}
-            onToggleVideo={toggleVideo}
-            onToggleAudio={toggleAudio}
-            localUserName={userName}
-            participants={participants}
-          />
+        <div style={{ width: `${videoPanelWidth}px` }} className="shrink-0 overflow-hidden">
+          <VideoPanel {...videoProps} />
         </div>
 
       </div>
